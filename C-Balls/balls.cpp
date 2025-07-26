@@ -51,7 +51,7 @@ public:
 
     CircleShape render() {
         this->shape.setPosition(this->pos);
-        this->speed_to_color();
+        //this->speed_to_color();
 
         return this->shape;
     }
@@ -135,7 +135,7 @@ class Solver {
 private:
 
 	vector<Particle> particles;
-	Vector2f gravity = Vector2f(0.f, 10.f);
+	Vector2f gravity = Vector2f(0.f, 1000.f);
     Vector2i window_size;
 
     int subsets = 8;
@@ -188,77 +188,6 @@ public:
     float normalize(float value, float min, float max) {
         return (max - min) > 0 ? (value - min) / (max - min) : 0.1f;
     }
-
-    bool isRestingOn(const Particle& upper, const Particle& lower, float tolerance = 1.5f) {
-        float verticalDist = lower.getPosition().y - upper.getPosition().y;
-        float horizontalDist = std::abs(upper.getPosition().x - lower.getPosition().x);
-        return
-            verticalDist > 1.5f * lower.getRadius() &&   // upper is higher
-            verticalDist < 2.5f * lower.getRadius() &&   // not too far
-            horizontalDist < lower.getRadius() * tolerance;
-    }
-
-    vector<const Particle*> getSupportsFor(const Particle& particle, const vector<Particle>& particles) {
-        std::vector<const Particle*> supports;
-        for (const Particle& other : particles) {
-            if (&particle != &other && isRestingOn(particle, other)) {
-                supports.push_back(&other);
-            }
-        }
-        // Fallback to avoid divide-by-zero
-        if (supports.empty()) supports.push_back(&particle);
-        return supports;
-    }
-
-    float computeSupportedWeight(Particle particle, const vector<Particle>& particles, unordered_map<const Particle*, float>& memo, float g = 10.f) {
-        if (memo.find(&particle) != memo.end()) {
-            return memo[&particle];
-        }
-
-        float totalWeight = g;
-
-        for (const Particle& other : particles) {
-            if (&particle == &other) continue;
-
-            // Check if "other" is resting on this "particle"
-            if (isRestingOn(other, particle)) {
-                float weightFromAbove = computeSupportedWeight(other, particles, memo, g);
-                auto supports = getSupportsFor(other, particles);
-                totalWeight += weightFromAbove / static_cast<float>(supports.size());
-            }
-        }
-
-        memo[&particle] = totalWeight;
-        return totalWeight;
-    }
-
-	void applyPressure() {
-        vector<float> pressures;
-        unordered_map<const Particle*, float> memo;
-
-        float minP = numeric_limits<float>::max();
-        float maxP = numeric_limits<float>::lowest();
-
-        for (const Particle& b : particles) {
-            float p = computeSupportedWeight(b, particles, memo);
-            pressures.push_back(p);
-			//cout << p << endl; 
-            if (p < minP) minP = p;
-            if (p > maxP) maxP = p;
-        }
-
-		for (int i = 0; i < pressures.size(); i++) {
-			cout << "Pressure of particle " << i << ": " << pressures[i] << endl;
-		}
-
-		cout << "Min Pressure: " << minP << ", Max Pressure: " << maxP << endl;
-
-		for (int i = 0; i < particles.size(); i++) {
-			float normalizedPressure = normalize(pressures[i], minP, maxP);
-			this->particles[i].pressure_to_color(normalizedPressure);
-		}
-        
-	}
 
     void applyCircleBoundary() {
     
@@ -353,7 +282,7 @@ public:
 
     void find_collisions() {
         unordered_map<int, vector<Particle*>> grid;
-		vector<float> pressures(particles.size(), 0.f);
+		//vector<float> pressures(particles.size(), 0.f);
 
 		// Populate the grid with particles
         for (auto& particle : particles) {
@@ -369,8 +298,8 @@ public:
 			Vector2f p_grid_pos = Vector2f(p_pos.x / GRID_SIZE, p_pos.y / GRID_SIZE);
 			for (int i = -1; i < 2; i++) {
 				for (int j = -1; j < 2; j++) {
-					int cellX = static_cast<int>(p_grid_pos.x) + i;
-					int cellY = static_cast<int>(p_grid_pos.y) + j;
+					int cellX = static_cast<int>(p_grid_pos.x) + j;
+					int cellY = static_cast<int>(p_grid_pos.y) + i;
 					int cellHash = cellX * 73856093 ^ cellY * 19349663; // Hash function for 2D grid
 					if (grid.find(cellHash) != grid.end()) {
 						std::vector<Particle*>& cellParticles = grid[cellHash];
@@ -416,20 +345,221 @@ public:
 
             find_collisions();
 
-            //applyBorder();
-            applyCircleBoundary();
+            applyBorder();
+            //applyCircleBoundary();
             //applyPressure();
         }
         render(window);
 	}
  };
 
+
+ class Solver2 {
+ private:
+     Vector2f* pos;
+     Vector2f* last_pos;
+     Vector2f* acceleration;
+     float* radius;
+     Vector2f gravity = Vector2f(0.f, 1000.f);
+     Vector2i window_size;
+     int ball_count;
+     CircleShape shape;
+
+	 float GRID_SIZE = 6.f;
+
+     float distance = 0.f;
+     float radius_sum = 0.f;
+     Vector2f velo;
+
+     int subsets = 8;
+     float sub_step_dt = 1.f / (60.f * subsets);
+ public:
+     Solver2(Vector2f* pos, Vector2f* last_pos, Vector2f* acceleration, float* radius, int ball_count, Vector2i window_size) {
+         this->pos = pos;
+         this->last_pos = last_pos;
+         this->acceleration = acceleration;
+         this->radius = radius;
+         this->ball_count = ball_count;
+         this->window_size = window_size;
+
+		 this->shape.setRadius(3.f);
+         this->shape.setFillColor(Color(0, 0, 255));
+         shape.setOrigin(Vector2f(3.f, 3.f));
+     }
+	 void render(RenderWindow& window) {
+		 for (int i = 0; i < ball_count; i++) {
+			 shape.setPosition(pos[i]);
+			 window.draw(shape);
+		 }
+	 }
+     void applyGravity() {
+		 for (int i = 0; i < ball_count; i++) {
+			 this->acceleration[i] += gravity;
+		 }
+		 //cout << "G" << this->acceleration[0].x << ", " << this->acceleration[0].y << endl;
+     }
+     void updateParticles() {
+         for (int i = 0; i < ball_count; i++) {
+             Vector2f displacement = Vector2f(pos[i].x - last_pos[i].x, pos[i].y - last_pos[i].y);
+             this->last_pos[i] = Vector2f(pos[i].x, pos[i].y);
+             float result = (sub_step_dt * sub_step_dt);
+             this->pos[i] += Vector2f(displacement.x + (acceleration[i].x * result), displacement.y + (acceleration[i].y * result));
+             this->acceleration[i] = Vector2f(0.f, 0.f);
+			 capVelocity(i);
+         }
+		 /*cout << "Pos: " << pos[0].x << ", " << pos[0].y << endl;
+		 cout << "Last Pos: " << last_pos[0].x << ", " << last_pos[0].y << endl;*/
+     }
+     void setVelocity(Vector2f v, float dt, int idx) {
+        this->last_pos[idx] = this->pos[idx] - (v * dt);
+     }
+     void capVelocity(int i) {
+         Vector2f velocity = this->pos[i] - this->last_pos[i];
+         float max_velocity = 5.f; // Set a maximum velocity
+         if (velocity.lengthSquared() > max_velocity * max_velocity) {
+             velocity = velocity.normalized() * max_velocity;
+             setVelocity(velocity, 1.f, i);
+         }
+     }
+
+     void applyBorder() {
+         for (int i = 0; i < ball_count; i++) {
+             Vector2f pos = Vector2f(this->pos[i].x , this->pos[i].y);
+             Vector2f new_pos = Vector2f(pos.x, pos.y);
+             Vector2f velocity = Vector2f(this->pos[i].x - this->last_pos[i].x, this->pos[i].y - this->last_pos[i].y);
+
+             float radius = this->radius[i];
+
+             float dampening = 0.75f;
+
+             Vector2f dy = Vector2f(velocity.x * dampening, -velocity.y);
+             Vector2f dx = Vector2f(-velocity.x, velocity.y * dampening);
+
+             if (pos.x - radius < 0 || pos.x + radius >= this->window_size.x) {
+                 if (pos.x - radius < 0) {
+                     new_pos.x = radius;
+                 }
+                 else {
+                     new_pos.x = this->window_size.x - radius;
+                 }
+                 this->pos[i] = new_pos;
+                 //cout << "Last Pos Before (SetV)" << last_pos[i].x << ", " << last_pos[i].y << endl;
+                 setVelocity(dx, 1.0f, i);
+				 //cout << "Last Pos After (SetV)" << last_pos[i].x << ", " << last_pos[i].y << endl;
+             }
+
+             if (pos.y - radius < 0 || pos.y + radius >= this->window_size.y) {
+                 if (pos.y - radius < 0) {
+                     new_pos.y = radius;
+                 }
+                 else {
+                     new_pos.y = this->window_size.y - radius;
+                 }
+                 this->pos[i] = new_pos;
+                 //cout << "Last Pos Before (SetV)" << last_pos[i].x << ", " << last_pos[i].y << endl;
+                 setVelocity(dy, 1.0f, i);
+                 //cout << "Last Pos After (SetV)" << last_pos[i].x << ", " << last_pos[i].y << endl;
+             }
+         }
+     }
+     void handleCollisions(int idx_1, int idx_2) {
+         Vector2f normal = this->velo / distance;
+         float delta = 0.5 * (this->radius_sum - this->distance);
+		 //cout << "Before" << endl;
+		 //cout << "Pos 1: " << this->pos[idx_1].x << ", " << this->pos[idx_1].y << endl;
+		 //cout << "Pos 2: " << this->pos[idx_2].x << ", " << this->pos[idx_2].y << endl;
+         this->pos[idx_1] += (normal * delta);
+         this->pos[idx_2] -= (normal * delta);
+		 //cout << "After" << endl;
+		 //cout << "Pos 1: " << this->pos[idx_1].x << ", " << this->pos[idx_1].y << endl;
+		 //cout << "Pos 2: " << this->pos[idx_2].x << ", " << this->pos[idx_2].y << endl;
+     }
+
+     bool collide(int idx_1, int idx_2) {
+         Vector2f pos1 = pos[idx_1];
+         Vector2f pos2 = pos[idx_2];
+         this->velo = pos[idx_1] - pos[idx_2];
+		 //cout << "Velo: " << velo.x << ", " << velo.y << endl;
+         float dist_squared = (velo.x * velo.x) + (velo.y * velo.y);
+		 //cout << "Dist Squared: " << dist_squared << endl;
+         this->radius_sum = radius[idx_1] + radius[idx_2];
+         float min_dist_squarted = pow(radius_sum, 2);
+
+
+         if (dist_squared < min_dist_squarted) {
+             this->distance = sqrt(dist_squared);
+             return true;
+         }
+         return false;
+     }
+
+     void find_collisions() {
+         unordered_map<int, vector<int>> grid;
+
+         // Populate the grid with particles
+         for (int i = 0; i < ball_count; i++) {
+             int cellX = static_cast<int>(std::floor(pos[i].x / GRID_SIZE));
+             int cellY = static_cast<int>(std::floor(pos[i].y / GRID_SIZE));
+             int cellHash = cellX * 73856093 ^ cellY * 19349663; // Hash function for 2D grid
+             //cout << "CellHash: " << cellHash << " I: " << i << endl;
+             grid[cellHash].push_back(i);
+         }
+
+         // Check for collisions for neighboring cells
+         for (int o = 0; o < ball_count; o++) {
+             Vector2f p_pos = Vector2f(pos[o].x, pos[o].y);
+             Vector2f p_grid_pos = Vector2f(p_pos.x / GRID_SIZE, p_pos.y / GRID_SIZE);
+             for (int i = -1; i < 2; i++) {
+                 for (int j = -1; j < 2; j++) {
+                     int cellX = static_cast<int>(p_grid_pos.x) + j;
+                     int cellY = static_cast<int>(p_grid_pos.y) + i;
+                     int cellHash = cellX * 73856093 ^ cellY * 19349663; // Hash function for 2D grid
+                     if (grid.find(cellHash) != grid.end()) {
+                         std::vector<int> cellParticles = grid[cellHash];
+                         // Check for collisions only within the specific neighbor
+                         for (size_t k = 0; k < cellParticles.size(); k++) {
+                             if (cellParticles[k] == o) {
+								 /*cout << "Skipping Self Collision" << o << " " << cellParticles[k] << endl;*/
+                                 continue; // Skip self-collision
+                             }
+                             if (collide(o, cellParticles[k])) {
+                                 //cout << "Hit" << " o: " << o << " cellK: " << cellParticles[k] << endl;
+                                 handleCollisions(o, cellParticles[k]);
+                             }
+                         }
+                     }
+                 }
+             }
+
+         }
+
+     }
+
+
+	 void update(float dt, RenderWindow& window) {
+         for (int i = 0; i < subsets; i++) {
+			 applyGravity();
+             updateParticles();
+
+             find_collisions();
+
+			 applyBorder();
+
+         }
+
+		 
+		 render(window);
+	 }
+ };
+
+
+
 int main()
 {
     sf::ContextSettings settings;
     settings.antiAliasingLevel = 8;
     
-    sf::RenderWindow window(sf::VideoMode({ 800, 800 }), "Ball Sim", sf::Style::Default, sf::State::Fullscreen, settings);
+    sf::RenderWindow window(sf::VideoMode({ 1000, 1000 }), "Ball Sim", sf::Style::Default, sf::State::Windowed, settings);
     window.setFramerateLimit(60);
 
     Clock clock;
@@ -448,8 +578,22 @@ int main()
 		ball_count++;
     }
 
-    Solver solver(balls, (Vector2i)window.getSize());
+	Vector2f* pos = new Vector2f[ball_count];  
+	Vector2f* last_pos = new Vector2f[ball_count];
+	Vector2f* acceleration = new Vector2f[ball_count];
+	float* radius = new float[ball_count];
 
+	for (int i = 0; i < ball_count; i++) {
+		pos[i] = balls[i].getPosition();
+		last_pos[i] = Vector2f(pos[i].x - balls[i].getVelocity().x, pos[i].y - balls[i].getVelocity().y);
+		acceleration[i] = Vector2f(0.f, 0.f);
+		radius[i] = balls[i].getRadius();
+	}
+
+	Solver2 solver2(pos, last_pos, acceleration, radius, ball_count, (Vector2i)window.getSize());
+
+    Solver solver(balls, (Vector2i)window.getSize());
+	
     int frameCount = 0;
 	bool stop_spawning = true;
 
@@ -477,9 +621,9 @@ int main()
                     else if (padding < 4.f && scroll->delta > 0) {
                         padding += 0.5f;
                     }
-					//cout << "Padding: " << padding << endl;
+                    //cout << "Padding: " << padding << endl;
                     solver.update_padding(padding);
-                    
+
                 }
                 else {
                     if (scroll->delta < 0) {
@@ -493,8 +637,6 @@ int main()
                         }
                     }
                 }
-                
-                
             }
             //cout << "Size: " << size << endl;
 
@@ -557,6 +699,7 @@ int main()
 		// clear the window with black color    
         window.clear(sf::Color::Black);
 
+		//solver2.update(1.f / 60.f, window);
 		solver.update(1.f / 60.f, window);
 
         window.display();
